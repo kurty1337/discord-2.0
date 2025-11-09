@@ -1,5 +1,5 @@
 export interface TranscriptionEntry {
-  speaker: 'user' | 'friend';
+  speaker: 'user' | 'friend' | 'ai';
   text: string;
 }
 

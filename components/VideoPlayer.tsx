@@ -18,6 +18,23 @@ const UserAvatar: React.FC<{ name: string }> = ({ name }) => (
     </div>
 );
 
+const AIAvatar: React.FC = () => (
+    <div className="w-full h-full flex items-center justify-center bg-gray-800">
+        <div className="w-28 h-28 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center animate-pulse">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-16 h-16 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 8V4H8" />
+                <rect x="4" y="12" width="16" height="8" rx="2" />
+                <path d="M2 12h2" />
+                <path d="M20 12h2" />
+                <path d="M12 12v-2" />
+                <path d="M12 18v-2" />
+                <path d="M9 16h6" />
+            </svg>
+        </div>
+    </div>
+);
+
+
 const VideoPlayer: React.FC<VideoPlayerProps> = ({ stream, isMuted = false, name, isLocalPlayer = false, onToggleMute }) => {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const hasVideoTrack = stream?.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.enabled);
@@ -28,15 +45,17 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ stream, isMuted = false, name
     }
   }, [stream]);
 
+  const remoteParticipantName = name === 'friend' ? 'Собеседник' : 'ИИ';
+
   return (
     <div className="relative w-full h-full bg-black rounded-lg overflow-hidden shadow-lg group">
       {hasVideoTrack ? (
         <video ref={videoRef} autoPlay playsInline muted={isLocalPlayer || isMuted} className="w-full h-full object-cover" />
       ) : (
-        <UserAvatar name={name} />
+         name === 'ai' ? <AIAvatar /> : <UserAvatar name={isLocalPlayer ? 'Вы' : remoteParticipantName} />
       )}
       <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-3 py-1 rounded-lg text-sm">
-        {name}
+        {isLocalPlayer ? 'Вы' : remoteParticipantName}
       </div>
       {!isLocalPlayer && onToggleMute && stream && (
          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">

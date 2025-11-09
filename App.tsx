@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { Peer, DataConnection, MediaConnection } from 'peerjs';
 import VideoPlayer from './components/VideoPlayer';
@@ -6,323 +5,289 @@ import Transcription from './components/Transcription';
 import { ConnectionState, TranscriptionEntry } from './types';
 import BottomBar from './components/BottomBar';
 
-// FIX: Add type definitions for browser-specific APIs (SpeechRecognition) and external libraries (PeerJS) to the global window object to resolve TypeScript errors.
-// FIX: Define SpeechRecognition interfaces to avoid circular references and provide types for the API.
 declare global {
-    interface SpeechRecognition {
-        continuous: boolean;
-        interimResults: boolean;
-        lang: string;
-        onresult: (event: any) => void;
-        onend: (() => void) | null;
-        start: () => void;
-        stop: () => void;
-    }
-
-    interface SpeechRecognitionStatic {
-        new (): SpeechRecognition;
-    }
-
     interface Window {
-        SpeechRecognition: SpeechRecognitionStatic;
-        webkitSpeechRecognition: SpeechRecognitionStatic;
         Peer: any;
     }
 }
 
-// Polyfill for SpeechRecognition
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-// FIX: Use the globally defined SpeechRecognition interface and remove 'globalThis' to resolve the type error.
-let recognition: SpeechRecognition | null = null;
-if (SpeechRecognition) {
-    recognition = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'ru-RU';
-}
-
 const App: React.FC = () => {
-    const [connectionState, setConnectionState] = useState<ConnectionState>(ConnectionState.IDLE);
-    const [useCamera, setUseCamera] = useState<boolean>(true);
+    const [username, setUsername] = useState<string | null>(null);
+    const [usernameInput, setUsernameInput] = useState<string>('');
+    const [inCall, setInCall] = useState(false);
+    const [peerId, setPeerId] = useState<string>('');
+    const [remotePeerId, setRemotePeerId] = useState('');
+    const [isCalling, setIsCalling] = useState(false);
+
     const [isMicOn, setIsMicOn] = useState<boolean>(true);
     const [isCameraOn, setIsCameraOn] = useState<boolean>(true);
-    const [hasCamera, setHasCamera] = useState<boolean>(false);
-    const [isRemoteMuted, setIsRemoteMuted] = useState<boolean>(false);
     const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
-    const [peerId, setPeerId] = useState<string>('');
-    const [remotePeerId, setRemotePeerId] = useState<string>('');
     
-    const [transcriptions, setTranscriptions] = useState<TranscriptionEntry[]>([]);
-    
+    const [userStream, setUserStream] = useState<MediaStream | null>(null);
+    const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+
     const peerRef = useRef<Peer | null>(null);
-    const userStreamRef = useRef<MediaStream | null>(null);
-    const screenStreamRef = useRef<MediaStream | null>(null);
-    const remoteStreamRef = useRef<MediaStream | null>(null);
-    const dataConnectionRef = useRef<DataConnection | null>(null);
     const mediaConnectionRef = useRef<MediaConnection | null>(null);
     
-    // Initialize PeerJS
+    // Check for saved username on initial load
     useEffect(() => {
-        if (!window.Peer) {
-            console.error("PeerJS is not loaded");
-            setConnectionState(ConnectionState.ERROR);
-            return;
+        const savedUser = localStorage.getItem('discordCloneUser');
+        if (savedUser) {
+            setUsername(savedUser);
         }
-        const peer = new (window.Peer as any)();
-        peerRef.current = peer;
+    }, []);
 
-        peer.on('open', (id) => {
-            setPeerId(id);
-        });
-
-        peer.on('call', (call) => {
-            // Answer incoming call
-            getMediaStream(useCamera).then(stream => {
-                 if (!stream) return;
-                 userStreamRef.current = stream;
-                 const videoTracks = stream.getVideoTracks();
-                 const cameraAvailable = videoTracks.length > 0;
-                 setIsCameraOn(cameraAvailable);
-                 setHasCamera(cameraAvailable);
-
-                 call.answer(stream);
-                 mediaConnectionRef.current = call;
-                 
-                 call.on('stream', (remoteStream) => {
-                     remoteStreamRef.current = remoteStream;
-                     setConnectionState(ConnectionState.CONNECTED);
-                 });
-                 
-                 call.on('close', handleEndCall);
-            });
-        });
-
-        peer.on('connection', (conn) => {
-            dataConnectionRef.current = conn;
-            conn.on('data', (data) => {
-                 const message = data as TranscriptionEntry;
-                 if(message.speaker === 'friend' && message.text) {
-                     setTranscriptions(prev => [...prev, message]);
-                 }
-            });
-        });
-
-        peer.on('error', (err) => {
-            console.error('PeerJS error:', err);
-            setConnectionState(ConnectionState.ERROR);
-        });
-
-        return () => {
-            peer.destroy();
-        };
-    }, [useCamera]);
-    
-    // Initialize SpeechRecognition
+    // Initialize PeerJS connection when username is set
     useEffect(() => {
-        if (!recognition) return;
-        
-        let finalTranscript = '';
-        recognition.onresult = (event) => {
-            let interimTranscript = '';
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-                if (event.results[i].isFinal) {
-                    finalTranscript += event.results[i][0].transcript;
-                } else {
-                    interimTranscript += event.results[i][0].transcript;
-                }
-            }
-        };
-
-        recognition.onend = () => {
-             if (finalTranscript) {
-                 const newEntry: TranscriptionEntry = { speaker: 'user', text: finalTranscript };
-                 setTranscriptions(prev => [...prev, newEntry]);
-                 if (dataConnectionRef.current && dataConnectionRef.current.open) {
-                     dataConnectionRef.current.send({ ...newEntry, speaker: 'friend' }); // Send as friend to the other side
-                 }
-                 finalTranscript = '';
-             }
-             // Restart recognition if call is active
-             if(connectionState === ConnectionState.CONNECTED) {
-                recognition.start();
-             }
-        };
-
-        return () => {
-            recognition?.stop();
-        };
-    }, [connectionState]);
-
-
-    const getMediaStream = async (video: boolean): Promise<MediaStream | null> => {
-        try {
-            let stream: MediaStream;
-            const constraints = { audio: true, video };
+        if (username && !peerRef.current) {
+            // A simple but effective way to create a user-specific but stable peer ID
+            const sanitizedId = username.replace(/[^a-zA-Z0-9]/g, '');
+            const peer = new window.Peer(`dc-clone-${sanitizedId}`);
+            peerRef.current = peer;
             
-            try {
-                stream = await navigator.mediaDevices.getUserMedia(constraints);
-            } catch (err) {
-                console.warn(`getUserMedia with constraints ${JSON.stringify(constraints)} failed, falling back to audio only.`, err);
-                if (video) {
-                    stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-                } else {
-                    throw err;
+            peer.on('open', (id) => {
+                setPeerId(id);
+            });
+
+            peer.on('call', async (call) => {
+                const stream = await getMediaStream(true, false);
+                setUserStream(stream);
+                call.answer(stream);
+                mediaConnectionRef.current = call;
+                call.on('stream', (rStream) => {
+                    setRemoteStream(rStream);
+                });
+                setInCall(true);
+            });
+            
+            peer.on('error', (err: any) => {
+                console.error("PeerJS Error:", err);
+                // Simple reconnect logic
+                if (!peer.destroyed) {
+                    peer.reconnect();
                 }
+            });
+        }
+         // Cleanup on component unmount
+        return () => {
+            peerRef.current?.destroy();
+        };
+    }, [username]);
+
+    const handleLogin = () => {
+        if (usernameInput.trim()) {
+            localStorage.setItem('discordCloneUser', usernameInput.trim());
+            setUsername(usernameInput.trim());
+        }
+    };
+
+    const getMediaStream = useCallback(async (video: boolean, screen: boolean): Promise<MediaStream | null> => {
+        try {
+            if (screen) {
+                return await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
             }
-            return stream;
+            return await navigator.mediaDevices.getUserMedia({ audio: true, video });
         } catch (error) {
             console.error('Failed to get user media', error);
-            setConnectionState(ConnectionState.ERROR);
             return null;
+        }
+    }, []);
+
+    const replaceStreamTrack = (newStream: MediaStream | null, kind: 'video' | 'audio') => {
+        if (!mediaConnectionRef.current || !newStream) return;
+        const sender = mediaConnectionRef.current.peerConnection.getSenders().find(s => s.track?.kind === kind);
+        const newTrack = kind === 'video' ? newStream.getVideoTracks()[0] : newStream.getAudioTracks()[0];
+        if (sender && newTrack) {
+            sender.replaceTrack(newTrack);
         }
     }
 
-
-    const handleStartCall = async () => {
-        if (!remotePeerId || !peerRef.current) return;
-        setConnectionState(ConnectionState.CONNECTING);
-        
-        const stream = await getMediaStream(useCamera);
-        if (!stream) return;
-        
-        userStreamRef.current = stream;
-        const videoTracks = stream.getVideoTracks();
-        const cameraAvailable = videoTracks.length > 0;
-        setIsCameraOn(cameraAvailable);
-        setHasCamera(cameraAvailable);
-
-        const call = peerRef.current.call(remotePeerId, stream);
-        mediaConnectionRef.current = call;
-        const conn = peerRef.current.connect(remotePeerId);
-        dataConnectionRef.current = conn;
-
-        call.on('stream', (remoteStream) => {
-            remoteStreamRef.current = remoteStream;
-            setConnectionState(ConnectionState.CONNECTED);
-            recognition?.start();
-        });
-
-        call.on('close', handleEndCall);
-        call.on('error', (err) => {
-            console.error("Call error:", err);
-            setConnectionState(ConnectionState.ERROR);
-        });
-        
-        conn.on('open', () => {
-             console.log("Data connection opened");
-        });
+    const handleCall = async () => {
+        if (!remotePeerId.trim() || !peerRef.current) {
+            alert("Please enter a friend's ID to call.");
+            return;
+        }
+        setIsCalling(true);
+        const stream = await getMediaStream(true, false);
+        if (stream) {
+            setUserStream(stream);
+            const call = peerRef.current.call(remotePeerId, stream);
+            mediaConnectionRef.current = call;
+            call.on('stream', (rStream) => {
+                setRemoteStream(rStream);
+                setInCall(true);
+            });
+             call.on('close', handleEndCall);
+        }
+        setIsCalling(false);
     };
 
     const handleEndCall = useCallback(() => {
         mediaConnectionRef.current?.close();
-        dataConnectionRef.current?.close();
-        userStreamRef.current?.getTracks().forEach(track => track.stop());
-        screenStreamRef.current?.getTracks().forEach(track => track.stop());
-        userStreamRef.current = null;
-        screenStreamRef.current = null;
-        remoteStreamRef.current = null;
-        recognition?.stop();
-        setConnectionState(ConnectionState.IDLE);
-        setTranscriptions([]);
-        setHasCamera(false);
-    }, []);
+        userStream?.getTracks().forEach(track => track.stop());
+        setInCall(false);
+        setUserStream(null);
+        setRemoteStream(null);
+        setIsScreenSharing(false);
+        setIsCameraOn(true);
+    }, [userStream]);
 
     const toggleMic = () => {
-        if (userStreamRef.current) {
-            userStreamRef.current.getAudioTracks().forEach(track => track.enabled = !isMicOn);
+        if (userStream) {
+            userStream.getAudioTracks().forEach(track => track.enabled = !isMicOn);
             setIsMicOn(!isMicOn);
         }
     };
 
-    const toggleCamera = () => {
-        if (userStreamRef.current && hasCamera) {
-            userStreamRef.current.getVideoTracks().forEach(track => track.enabled = !isCameraOn);
+    const toggleCamera = async () => {
+        if (isScreenSharing) {
+             // If screen sharing, stop it and revert to camera
+            await toggleScreenShare();
+            return;
+        }
+        if (userStream) {
+            userStream.getVideoTracks().forEach(track => track.enabled = !isCameraOn);
             setIsCameraOn(!isCameraOn);
         }
     };
-    
-    const toggleRemoteMute = () => {
-        setIsRemoteMuted(!isRemoteMuted);
-    };
 
     const toggleScreenShare = async () => {
-        alert("Демонстрация экрана в разработке!");
+        if (!isScreenSharing) {
+            const screenStream = await getMediaStream(false, true);
+            if (screenStream) {
+                // When user stops sharing via browser UI
+                screenStream.getVideoTracks()[0].onended = () => {
+                    toggleScreenShare(); // Revert back to camera
+                };
+                
+                // Replace video track
+                userStream?.getVideoTracks().forEach(track => track.stop());
+                const newStream = new MediaStream([...userStream?.getAudioTracks() || [], ...screenStream.getVideoTracks()]);
+                replaceStreamTrack(screenStream, 'video');
+                setUserStream(newStream);
+                setIsScreenSharing(true);
+                setIsCameraOn(true); // Visually, the "camera" is on (it's the screen)
+            }
+        } else {
+            const cameraStream = await getMediaStream(true, false);
+            if (cameraStream) {
+                 userStream?.getTracks().forEach(track => track.stop());
+                 replaceStreamTrack(cameraStream, 'video');
+                 setUserStream(cameraStream);
+                 setIsScreenSharing(false);
+                 setIsCameraOn(true);
+            }
+        }
     };
 
 
-    if (connectionState === ConnectionState.IDLE || connectionState === ConnectionState.ERROR) {
+    if (!username) {
         return (
             <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#36393f] p-4 text-center text-gray-200">
-                <h1 className="text-4xl font-bold text-purple-400 mb-2">P2P Видеозвонок</h1>
-                <p className="text-gray-400 mb-6">Общайтесь с другом напрямую, используя WebRTC.</p>
-
-                <div className="bg-[#2f3136] p-4 rounded-lg mb-4 w-full max-w-sm">
-                    <p className="text-sm text-gray-400">Ваш ID для звонка:</p>
-                    <p className="text-lg font-mono bg-[#202225] px-2 py-1 rounded select-all">{peerId || 'Загрузка...'}</p>
-                </div>
-                
+                <h1 className="text-4xl font-bold text-purple-400 mb-2">Добро пожаловать</h1>
+                <p className="text-gray-400 mb-6">Введите ваше имя пользователя, чтобы продолжить.</p>
                 <div className="flex flex-col items-center w-full max-w-sm">
                     <input
                         type="text"
-                        placeholder="Введите ID собеседника"
-                        value={remotePeerId}
-                        onChange={(e) => setRemotePeerId(e.target.value)}
+                        placeholder="Ваше имя"
+                        value={usernameInput}
+                        onChange={(e) => setUsernameInput(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                         className="w-full px-4 py-2 mb-4 bg-[#202225] border border-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
-                     <div className="flex items-center mb-4">
-                        <input
-                            id="use-camera"
-                            type="checkbox"
-                            checked={useCamera}
-                            onChange={(e) => setUseCamera(e.target.checked)}
-                            className="w-4 h-4 text-purple-600 bg-gray-700 border-gray-600 rounded focus:ring-purple-500 ring-offset-[#36393f] focus:ring-2"
-                        />
-                        <label htmlFor="use-camera" className="ml-2 text-sm font-medium text-gray-300">Использовать камеру</label>
-                    </div>
                     <button
-                        onClick={handleStartCall}
-                        disabled={!remotePeerId || !peerId}
+                        onClick={handleLogin}
+                        disabled={!usernameInput.trim()}
                         className="w-full px-8 py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg transition-transform transform hover:scale-105 disabled:bg-gray-600 disabled:cursor-not-allowed disabled:scale-100"
                     >
-                        Позвонить
+                        Войти
                     </button>
                 </div>
-                {connectionState === ConnectionState.ERROR && <p className="text-red-500 mt-4">Произошла ошибка. Проверьте консоль или разрешения.</p>}
             </div>
         );
     }
     
-    if (connectionState === ConnectionState.CONNECTING) {
-        return (
-             <div className="w-screen h-screen flex items-center justify-center bg-[#36393f]">
-                <p className="text-xl animate-pulse text-gray-300">Соединение...</p>
-             </div>
-        );
-    }
-
+    // Main App Layout
     return (
-        <main className="w-screen h-screen flex flex-col bg-[#36393f] text-gray-200 font-sans">
-            <div className="flex-grow flex flex-col p-2 overflow-hidden">
-                <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-2 min-h-0">
-                    <VideoPlayer stream={userStreamRef.current!} isLocalPlayer={true} name="Вы" />
-                    <VideoPlayer stream={remoteStreamRef.current!} isMuted={isRemoteMuted} name="Собеседник" onToggleMute={toggleRemoteMute} />
+        <div className="flex h-screen w-screen text-gray-300 font-sans">
+            {/* Server List */}
+            <div className="w-16 bg-[#202225] p-2 flex flex-col items-center space-y-2">
+                 <div className="server-icon bg-purple-600">D</div>
+                 <div className="server-icon">S1</div>
+                 <div className="server-icon">S2</div>
+                 <div className="server-icon text-green-400 text-2xl">+</div>
+            </div>
+
+            {/* Channel List & User Panel */}
+            <div className="w-60 bg-[#2f3136] flex flex-col">
+                <div className="p-3 shadow-md">
+                    <h2 className="font-bold text-white text-lg">My Server</h2>
                 </div>
-                <div className="w-full h-1/3 max-h-64 pt-2">
-                     <Transcription entries={transcriptions} />
+                <div className="flex-grow p-2 overflow-y-auto channel-list">
+                    <div className="channel-category">TEXT CHANNELS</div>
+                    <div className="channel active"># general</div>
+                    <div className="channel"># announcements</div>
+                    <div className="channel-category mt-4">VOICE CHANNELS</div>
+                    <button className="channel w-full text-left" onClick={() => !inCall && setInCall(true)}>General</button>
+                </div>
+                <div className="p-2 bg-[#292b2f] flex items-center">
+                     <div className="relative">
+                        <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center mr-3">
+                            <span className="text-xl font-bold">{username.charAt(0).toUpperCase()}</span>
+                        </div>
+                        <div className="absolute bottom-0 right-2 w-4 h-4 bg-green-500 border-2 border-[#292b2f] rounded-full"></div>
+                    </div>
+                    <div>
+                         <p className="font-semibold text-sm text-white">{username}</p>
+                         <p className="text-xs text-gray-400 font-mono select-all" title={peerId}>{peerId.substring(0, 15)}...</p>
+                    </div>
                 </div>
             </div>
-            <BottomBar 
-                isMicOn={isMicOn}
-                isCameraOn={isCameraOn}
-                isCameraAvailable={hasCamera}
-                isScreenSharing={isScreenSharing}
-                onToggleMic={toggleMic}
-                onToggleCamera={toggleCamera}
-                onToggleScreenShare={toggleScreenShare}
-                onEndCall={handleEndCall}
-                peerId={peerId}
-            />
-        </main>
+
+            {/* Main Content */}
+            <div className="flex-grow bg-[#36393f] flex flex-col">
+                {!inCall ? (
+                    <div className="p-4">
+                        <h1 className="text-2xl text-white font-bold mb-4">Welcome to #general!</h1>
+                         <p className="text-gray-400 mb-6">Это начало. Вы можете позвонить другу, введя его ID и нажав "Позвонить".</p>
+                         <div className="flex items-center space-x-2 max-w-md">
+                            <input
+                                type="text"
+                                placeholder="Введите ID друга для звонка"
+                                value={remotePeerId}
+                                onChange={(e) => setRemotePeerId(e.target.value)}
+                                className="w-full px-4 py-2 bg-[#202225] border border-black/20 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            />
+                             <button
+                                onClick={handleCall}
+                                disabled={isCalling || !remotePeerId.trim()}
+                                className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg disabled:bg-gray-600"
+                            >
+                                {isCalling ? 'Звонок...' : 'Позвонить'}
+                            </button>
+                         </div>
+                    </div>
+                ) : (
+                   <main className="flex-grow flex flex-col bg-inherit overflow-hidden">
+                       <div className="flex-grow p-2 min-h-0">
+                           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 h-full">
+                               <VideoPlayer stream={userStream} isLocalPlayer={true} name={username} />
+                               <VideoPlayer stream={remoteStream} name="friend" />
+                           </div>
+                       </div>
+                       <BottomBar
+                           isMicOn={isMicOn}
+                           isCameraOn={isCameraOn}
+                           isScreenSharing={isScreenSharing}
+                           onToggleMic={toggleMic}
+                           onToggleCamera={toggleCamera}
+                           onToggleScreenShare={toggleScreenShare}
+                           onEndCall={handleEndCall}
+                       />
+                   </main>
+                )}
+            </div>
+        </div>
     );
 };
 
