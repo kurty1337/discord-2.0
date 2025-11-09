@@ -1,26 +1,31 @@
-
 import React from 'react';
 
 interface VideoPlayerProps {
   stream?: MediaStream;
   isMuted?: boolean;
   name: string;
+  avatarUrl?: string | null;
   isLocalPlayer?: boolean;
+  isAiSpeaking?: boolean; // New prop for AI speaking state
   onToggleMute?: () => void;
 }
 
 
-const UserAvatar: React.FC<{ name: string }> = ({ name }) => (
+const UserAvatar: React.FC<{ name: string; avatarUrl?: string | null }> = ({ name, avatarUrl }) => (
     <div className="w-full h-full flex items-center justify-center bg-gray-700">
-        <div className="w-24 h-24 bg-purple-600 rounded-full flex items-center justify-center">
-            <span className="text-4xl font-bold text-white">{name.charAt(0).toUpperCase()}</span>
-        </div>
+        {avatarUrl ? (
+            <img src={avatarUrl} alt={name} className="w-24 h-24 rounded-full object-cover" />
+        ) : (
+            <div className="w-24 h-24 bg-purple-600 rounded-full flex items-center justify-center">
+                <span className="text-4xl font-bold text-white">{name.charAt(0).toUpperCase()}</span>
+            </div>
+        )}
     </div>
 );
 
-const AIAvatar: React.FC = () => (
+const AIAvatar: React.FC<{ isSpeaking?: boolean }> = ({ isSpeaking }) => (
     <div className="w-full h-full flex items-center justify-center bg-gray-800">
-        <div className="w-28 h-28 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center animate-pulse">
+        <div className={`w-28 h-28 bg-gradient-to-br from-purple-500 to-indigo-600 rounded-full flex items-center justify-center transition-transform duration-200 ${isSpeaking ? 'animate-pulse scale-110' : 'scale-100'}`}>
             <svg xmlns="http://www.w3.org/2000/svg" className="w-16 h-16 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 8V4H8" />
                 <rect x="4" y="12" width="16" height="8" rx="2" />
@@ -35,7 +40,7 @@ const AIAvatar: React.FC = () => (
 );
 
 
-const VideoPlayer: React.FC<VideoPlayerProps> = ({ stream, isMuted = false, name, isLocalPlayer = false, onToggleMute }) => {
+const VideoPlayer: React.FC<VideoPlayerProps> = ({ stream, isMuted = false, name, avatarUrl, isLocalPlayer = false, isAiSpeaking = false, onToggleMute }) => {
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const hasVideoTrack = stream?.getVideoTracks().length > 0 && stream.getVideoTracks().some(t => t.enabled);
 
@@ -45,17 +50,18 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ stream, isMuted = false, name
     }
   }, [stream]);
 
-  const remoteParticipantName = name === 'friend' ? 'Собеседник' : 'ИИ';
+  const remoteParticipantName = name === 'friend' ? 'Собеседник' : name === 'ai' ? 'ИИ' : name;
+  const displayName = isLocalPlayer ? 'Вы' : remoteParticipantName;
 
   return (
     <div className="relative w-full h-full bg-black rounded-lg overflow-hidden shadow-lg group">
       {hasVideoTrack ? (
         <video ref={videoRef} autoPlay playsInline muted={isLocalPlayer || isMuted} className="w-full h-full object-cover" />
       ) : (
-         name === 'ai' ? <AIAvatar /> : <UserAvatar name={isLocalPlayer ? 'Вы' : remoteParticipantName} />
+         name === 'ai' ? <AIAvatar isSpeaking={isAiSpeaking} /> : <UserAvatar name={displayName} avatarUrl={avatarUrl} />
       )}
       <div className="absolute bottom-2 left-2 bg-black bg-opacity-50 px-3 py-1 rounded-lg text-sm">
-        {isLocalPlayer ? 'Вы' : remoteParticipantName}
+        {displayName}
       </div>
       {!isLocalPlayer && onToggleMute && stream && (
          <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
