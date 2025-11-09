@@ -1,0 +1,8 @@
+{
+  "name": "Gemini AI Video Call",
+  "description": "A web application that allows you to have a real-time voice and video conversation with a Gemini AI assistant. Features include screen sharing analysis and real-time transcription.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
